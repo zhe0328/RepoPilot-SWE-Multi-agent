@@ -105,7 +105,7 @@ def prepared_workspace(
     restore: bool = True,
 ):
     saved_ref = _git_current_ref(repo_path)
-    subprocess.run(["git", "checkout", base_commit], cwd=repo_path, check=True)
+    subprocess.run(["git", "checkout", "-f", base_commit], cwd=repo_path, check=True)
     if setup_patch is not None:
         subprocess.run(["git", "apply", str(setup_patch)], cwd=repo_path, check=True)
     try:
