@@ -28,7 +28,7 @@ def run(
     no_restore: bool = typer.Option(
         False,
         "--no-restore",
-        help="Leave repo on task state after run (do not git checkout back)",
+        help="Keep the task git worktree after run (default: remove runs/{task_id}/.workspace)",
     ),
 ) -> None:
     """Run a benchmark task in baseline (mini) mode."""

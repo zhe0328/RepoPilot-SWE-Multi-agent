@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -79,55 +79,59 @@ def build_mini_command(task: TaskConfig, trajectory_path: Path) -> list[str]:
     ]
 
 
-def _git_current_ref(repo_path: Path) -> str:
-    branch = subprocess.run(
-        ["git", "symbolic-ref", "-q", "--short", "HEAD"],
+def _remove_worktree(repo_path: Path, worktree_path: Path) -> None:
+    if not worktree_path.is_dir():
+        return
+    result = subprocess.run(
+        ["git", "worktree", "remove", "--force", str(worktree_path)],
         cwd=repo_path,
         capture_output=True,
         text=True,
     )
-    if branch.returncode == 0:
-        return branch.stdout.strip()
-    sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return sha.stdout.strip()
-
-
-def _stage_setup_patch(setup_patch: Path | None) -> Path | None:
-    """Copy setup patch to a temp file so it survives git checkout."""
-    if setup_patch is None:
-        return None
-    tmp = Path(tempfile.mkstemp(suffix=".patch")[1])
-    tmp.write_bytes(setup_patch.read_bytes())
-    return tmp
+    if result.returncode != 0 and worktree_path.exists():
+        shutil.rmtree(worktree_path, ignore_errors=True)
+        subprocess.run(["git", "worktree", "prune"], cwd=repo_path, check=False)
 
 
 @contextmanager
-def prepared_workspace(
+def isolated_workspace(
     repo_path: Path,
     base_commit: str,
     setup_patch: Path | None,
     *,
-    restore: bool = True,
+    worktree_path: Path,
+    keep: bool = False,
 ):
-    saved_ref = _git_current_ref(repo_path)
-    staged_patch = _stage_setup_patch(setup_patch)
-    subprocess.run(["git", "checkout", "-f", base_commit], cwd=repo_path, check=True)
-    if staged_patch is not None:
-        try:
-            subprocess.run(["git", "apply", str(staged_patch)], cwd=repo_path, check=True)
-        finally:
-            staged_patch.unlink(missing_ok=True)
+    """Prepare a detached git worktree for the task without touching the dev checkout."""
+    worktree_path = worktree_path.resolve()
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    _remove_worktree(repo_path, worktree_path)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(worktree_path), base_commit],
+        cwd=repo_path,
+        check=True,
+    )
+    if setup_patch is not None:
+        subprocess.run(["git", "apply", str(setup_patch)], cwd=worktree_path, check=True)
     try:
-        yield
+        yield worktree_path
     finally:
-        if restore:
-            subprocess.run(["git", "checkout", "-f", saved_ref], cwd=repo_path, check=True)
+        if not keep:
+            _remove_worktree(repo_path, worktree_path)
+
+
+# Backward-compatible alias for tests/mocks.
+prepared_workspace = isolated_workspace
+
+
+def _workspace_env(workspace: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    upstream_src = workspace / "upstream" / "src"
+    if upstream_src.is_dir():
+        prefix = str(upstream_src)
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = f"{prefix}{os.pathsep}{existing}" if existing else prefix
+    return env
 
 
 def run_verification(task: TaskConfig, repo_path: Path, log_path: Path) -> int:
@@ -136,6 +140,7 @@ def run_verification(task: TaskConfig, repo_path: Path, log_path: Path) -> int:
         task.test_command,
         shell=True,
         cwd=repo_path,
+        env=_workspace_env(repo_path),
         capture_output=True,
         text=True,
     )
@@ -205,10 +210,13 @@ def run_benchmark_task(
     verify_log = output_dir / "verify_test.log"
     mini_command = build_mini_command(task, trajectory_path)
 
+    workspace_path = output_dir / ".workspace"
+
     if dry_run:
         typer_echo = _get_typer_echo()
         typer_echo(f"task_id: {task.task_id}")
         typer_echo(f"repo_path: {repo_path}")
+        typer_echo(f"workspace: {workspace_path} (git worktree at {task.repo.base_commit})")
         typer_echo(f"trajectory: {trajectory_path}")
         typer_echo(f"mini: {' '.join(mini_command)}")
         typer_echo(f"verify: {task.test_command}")
@@ -226,18 +234,19 @@ def run_benchmark_task(
         )
 
     mini_exit_code: int | None = None
-    with prepared_workspace(
+    with isolated_workspace(
         repo_path,
         task.repo.base_commit,
         task.setup_patch_path(),
-        restore=restore_workspace,
-    ):
+        worktree_path=workspace_path,
+        keep=not restore_workspace,
+    ) as workspace:
         if not skip_mini:
             output_dir.mkdir(parents=True, exist_ok=True)
-            mini_result = subprocess.run(mini_command, cwd=repo_path)
+            mini_result = subprocess.run(mini_command, cwd=workspace, env=_workspace_env(workspace))
             mini_exit_code = mini_result.returncode
 
-        test_exit_code = run_verification(task, repo_path, verify_log)
+        test_exit_code = run_verification(task, workspace, verify_log)
         tests_passed = test_exit_code == 0
 
         if trajectory_path.is_file():

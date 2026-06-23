@@ -6,10 +6,13 @@ from pathlib import Path
 
 import typer
 
+from repopilot.eval import write_eval_summary
 from repopilot.runner.run_task import find_project_root, resolve_task_dir, run_benchmark_task
 from repopilot.trace import TraceContext, record_trace
 
 app = typer.Typer(help="Run RepoPilot benchmark tasks.")
+eval_app = typer.Typer(help="Aggregate and report on benchmark runs.")
+app.add_typer(eval_app, name="eval")
 
 
 @app.command("run")
@@ -29,7 +32,7 @@ def run(
     no_restore: bool = typer.Option(
         False,
         "--no-restore",
-        help="Leave repo on task state after run (do not git checkout back)",
+        help="Keep the task git worktree after run (default: remove runs/{task_id}/.workspace)",
     ),
 ) -> None:
     """Run a benchmark task end-to-end."""
@@ -76,6 +79,30 @@ def trace(
     typer.echo(f"  {artifacts.patch_diff.name}")
     typer.echo(f"  {artifacts.test_log.name}")
     typer.echo(f"  {artifacts.final_report.name}")
+
+
+@eval_app.command("summary")
+def eval_summary(
+    runs_dir: Path = typer.Option(
+        Path("runs"),
+        "--runs-dir",
+        help="Directory containing per-task run outputs",
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "-o",
+        "--output-dir",
+        help="Eval output directory (default: runs/eval/summary)",
+    ),
+) -> None:
+    """Aggregate trace.json + run_meta.yaml into eval reports."""
+    root = find_project_root().resolve()
+    runs = (runs_dir if runs_dir.is_absolute() else root / runs_dir).resolve()
+    out = write_eval_summary(runs, output_dir=output_dir)
+    typer.echo(f"Wrote eval summary to {out}/")
+    typer.echo("  eval_report.md")
+    typer.echo("  metrics.json")
+    typer.echo("  failure_breakdown.md")
 
 
 if __name__ == "__main__":
