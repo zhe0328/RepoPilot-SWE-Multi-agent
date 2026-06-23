@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repopilot-swe-agent"
+version = "0.1.0"
+description = "Execution-grounded SWE agent built on mini-swe-agent"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mini-swe-agent",
+    "pyyaml",
+    "pydantic >= 2.0",
+    "typer",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",
+]
+
+[project.scripts]
+repopilot = "repopilot.runner.benchmark:app"
+repopilot-baseline = "repopilot.runner.baseline:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["repopilot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/repopilot"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
