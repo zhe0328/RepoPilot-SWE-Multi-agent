@@ -60,22 +60,37 @@ print(task.agent.resolve_output_trajectory(task.task_id))
 Run via CLI:
 
 ```bash
-repopilot task_001_sudoku
+repopilot run task_001_sudoku
 # or
-repopilot-baseline task_001_sudoku
+repopilot-baseline run task_001_sudoku
 ```
 
 Dry-run (print commands only):
 
 ```bash
-repopilot task_001_sudoku --dry-run
+repopilot run task_001_sudoku --dry-run
 ```
 
 Skip agent (workspace prep + verify only; expect verify failure):
 
 ```bash
-repopilot task_001_sudoku --skip-mini
+repopilot run task_001_sudoku --skip-mini
 ```
+
+Re-record trace artifacts from an existing trajectory:
+
+```bash
+repopilot trace runs/task_001_sudoku/trajectory.traj.json
+```
+
+Phase 2 outputs (also written automatically after each run):
+
+| File | Description |
+|------|-------------|
+| `trace.json` | Structured steps, tool calls, metrics |
+| `patch.diff` | Extracted/reconstructed patch |
+| `test.log` | Pytest runs from trajectory + runner verify |
+| `final_report.md` | Human-readable run summary |
 
 Pre-run check (manual):
 

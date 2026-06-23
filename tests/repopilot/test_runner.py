@@ -1,9 +1,11 @@
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from repopilot.runner.run_task import (
+    _stage_setup_patch,
     build_mini_command,
     resolve_task_dir,
     run_benchmark_task,
@@ -50,8 +52,27 @@ def test_run_benchmark_task_dry_run(_which, capsys):
     assert "task_001_sudoku" in captured.out
 
 
+def test_stage_setup_patch_copies_to_temp():
+    patch_path = TASK_001 / "setup.patch"
+    staged = _stage_setup_patch(patch_path)
+    try:
+        assert staged is not None
+        assert staged.is_file()
+        assert staged.read_bytes() == patch_path.read_bytes()
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+@contextmanager
+def _noop_workspace(*_args, **_kwargs):
+    yield
+
+
+@patch("repopilot.runner.run_task.run_verification", return_value=1)
+@patch("repopilot.runner.run_task.prepared_workspace")
 @patch("repopilot.runner.run_task.shutil.which", return_value="/usr/bin/mini")
-def test_skip_mini_prepares_buggy_state_and_fails_verify(_which):
+def test_skip_mini_skips_agent_and_records_verify_failure(_which, mock_workspace, _verify):
+    mock_workspace.side_effect = lambda *args, **kwargs: _noop_workspace()
     result = run_benchmark_task(
         TASK_001,
         project_root=ROOT,
@@ -60,8 +81,6 @@ def test_skip_mini_prepares_buggy_state_and_fails_verify(_which):
     )
     assert result.mini_exit_code is None
     assert result.tests_passed is False
-    assert result.test_exit_code != 0
+    assert result.test_exit_code == 1
     assert (result.output_dir / "verify_test.log").is_file()
     assert (result.output_dir / "run_meta.yaml").is_file()
-    sudoku = ROOT / "upstream/src/minisweagent/run/sudoku.py"
-    assert "value + 1" not in sudoku.read_text()

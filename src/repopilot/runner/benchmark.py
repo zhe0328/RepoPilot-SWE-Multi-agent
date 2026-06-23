@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from repopilot.runner.run_task import find_project_root, resolve_task_dir, run_benchmark_task
+from repopilot.trace import TraceContext, record_trace
 
 app = typer.Typer(help="Run RepoPilot benchmark tasks.")
 
@@ -47,6 +48,34 @@ def run(
     typer.echo(f"  mini exit code: {result.mini_exit_code}")
     typer.echo(f"  verify exit code: {result.test_exit_code} ({'passed' if result.tests_passed else 'failed'})")
     typer.echo(f"  artifacts: {result.output_dir}/")
+
+
+@app.command("trace")
+def trace(
+    trajectory: Path = typer.Argument(..., help="Path to trajectory.traj.json"),
+    output_dir: Path | None = typer.Option(
+        None,
+        "-o",
+        "--output-dir",
+        help="Output directory (default: same directory as trajectory)",
+    ),
+    task_id: str | None = typer.Option(None, "--task-id", help="Task id for the trace record"),
+) -> None:
+    """Build trace.json / patch.diff / test.log / final_report.md from a trajectory."""
+    trajectory = trajectory.resolve()
+    if not trajectory.is_file():
+        raise typer.BadParameter(f"Trajectory not found: {trajectory}")
+    out = (output_dir or trajectory.parent).resolve()
+    artifacts = record_trace(
+        trajectory,
+        out,
+        ctx=TraceContext(task_id=task_id or out.name),
+    )
+    typer.echo(f"Wrote trace artifacts to {out}/")
+    typer.echo(f"  {artifacts.trace_json.name}")
+    typer.echo(f"  {artifacts.patch_diff.name}")
+    typer.echo(f"  {artifacts.test_log.name}")
+    typer.echo(f"  {artifacts.final_report.name}")
 
 
 if __name__ == "__main__":

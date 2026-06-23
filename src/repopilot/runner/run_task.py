@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from repopilot.schema import TaskConfig, load_task
+from repopilot.trace import TraceContext, record_trace
 
 
 @dataclass
@@ -96,6 +98,15 @@ def _git_current_ref(repo_path: Path) -> str:
     return sha.stdout.strip()
 
 
+def _stage_setup_patch(setup_patch: Path | None) -> Path | None:
+    """Copy setup patch to a temp file so it survives git checkout."""
+    if setup_patch is None:
+        return None
+    tmp = Path(tempfile.mkstemp(suffix=".patch")[1])
+    tmp.write_bytes(setup_patch.read_bytes())
+    return tmp
+
+
 @contextmanager
 def prepared_workspace(
     repo_path: Path,
@@ -105,9 +116,13 @@ def prepared_workspace(
     restore: bool = True,
 ):
     saved_ref = _git_current_ref(repo_path)
+    staged_patch = _stage_setup_patch(setup_patch)
     subprocess.run(["git", "checkout", "-f", base_commit], cwd=repo_path, check=True)
-    if setup_patch is not None:
-        subprocess.run(["git", "apply", str(setup_patch)], cwd=repo_path, check=True)
+    if staged_patch is not None:
+        try:
+            subprocess.run(["git", "apply", str(staged_patch)], cwd=repo_path, check=True)
+        finally:
+            staged_patch.unlink(missing_ok=True)
     try:
         yield
     finally:
@@ -231,6 +246,17 @@ def run_benchmark_task(
                 output_dir,
                 issue_path=task.issue_path(),
                 project_root=root,
+            )
+            record_trace(
+                trajectory_path,
+                output_dir,
+                ctx=TraceContext(
+                    task_id=task.task_id,
+                    issue_path=str(task.issue_path()),
+                    verify_test_log=verify_log if verify_log.is_file() else None,
+                    tests_passed=tests_passed,
+                    agent_mode=task.agent.mode,
+                ),
             )
 
     finished_at = datetime.now(timezone.utc)
