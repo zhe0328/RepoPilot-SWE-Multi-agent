@@ -91,13 +91,14 @@ def test_isolated_workspace_does_not_change_dev_branch():
     worktree = ROOT / "runs" / "_isolation_test" / ".workspace"
     with isolated_workspace(
         ROOT,
-        "ddd3785",
+        "61e468b",
         TASK_002 / "setup.patch",
         worktree_path=worktree,
     ) as workspace:
         assert workspace.is_dir()
         assert (workspace / "benchmarks" / "task_001_sudoku").is_dir()
         assert (workspace / "upstream" / "src" / "minisweagent" / "run" / "eval_module.py").is_file()
+        assert (workspace / "upstream" / "src" / "minisweagent" / "run" / "expr" / "evaluate.py").is_file()
     after = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         cwd=ROOT,
@@ -107,3 +108,40 @@ def test_isolated_workspace_does_not_change_dev_branch():
     ).stdout.strip()
     assert before == after
     assert not worktree.exists()
+
+
+@pytest.mark.skipif(not TASK_002.is_dir(), reason="requires task_002_eval_module")
+def test_setup_patch_stages_buggy_state_in_index():
+    import subprocess
+
+    worktree = ROOT / "runs" / "_index_test" / ".workspace"
+    try:
+        with isolated_workspace(
+            ROOT,
+            "61e468b",
+            TASK_002 / "setup.patch",
+            worktree_path=worktree,
+        ):
+            wt_vs_index = subprocess.run(
+                ["git", "diff", "--stat"],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            cached = subprocess.run(
+                ["git", "diff", "--cached", "--stat"],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            assert wt_vs_index == ""
+            assert "eval_module.py" in cached
+    finally:
+        if worktree.is_dir():
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", str(worktree)],
+                cwd=ROOT,
+                capture_output=True,
+            )

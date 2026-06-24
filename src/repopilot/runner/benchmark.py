@@ -6,7 +6,9 @@ from pathlib import Path
 
 import typer
 
-from repopilot.eval import write_eval_summary
+from repopilot.eval import write_eval_compare, write_eval_summary
+from repopilot.eval.loader import load_run_record, resolve_task_run_dir
+from repopilot.eval.visualize import open_run_view, write_run_view
 from repopilot.runner.run_task import find_project_root, resolve_task_dir, run_benchmark_task
 from repopilot.trace import TraceContext, record_trace
 
@@ -64,7 +66,7 @@ def trace(
     ),
     task_id: str | None = typer.Option(None, "--task-id", help="Task id for the trace record"),
 ) -> None:
-    """Build trace.json / patch.diff / test.log / final_report.md from a trajectory."""
+    """Build trace.json / patch.diff / test.log / final_report.md / failure_reason.md from a trajectory."""
     trajectory = trajectory.resolve()
     if not trajectory.is_file():
         raise typer.BadParameter(f"Trajectory not found: {trajectory}")
@@ -79,6 +81,7 @@ def trace(
     typer.echo(f"  {artifacts.patch_diff.name}")
     typer.echo(f"  {artifacts.test_log.name}")
     typer.echo(f"  {artifacts.final_report.name}")
+    typer.echo(f"  {artifacts.failure_reason.name}")
 
 
 @eval_app.command("summary")
@@ -103,6 +106,110 @@ def eval_summary(
     typer.echo("  eval_report.md")
     typer.echo("  metrics.json")
     typer.echo("  failure_breakdown.md")
+    typer.echo("  comparison_table.csv")
+    typer.echo(f"  {runs / 'eval' / 'compare' / 'comparison_report.md'}")
+    typer.echo("  ../eval/{task_id}/trajectory_analysis.md (per task)")
+    typer.echo("  ../eval/{task_id}/view.html (per task)")
+
+
+@eval_app.command("compare")
+def eval_compare(
+    task: str | None = typer.Option(None, "--task", help="Filter to a single task_id"),
+    runs_dir: Path = typer.Option(
+        Path("runs"),
+        "--runs-dir",
+        help="Directory containing per-task run outputs",
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "-o",
+        "--output-dir",
+        help="Output directory (default: runs/eval/compare)",
+    ),
+) -> None:
+    """Compare tasks on steps, cost, and files touched."""
+    root = find_project_root().resolve()
+    runs = (runs_dir if runs_dir.is_absolute() else root / runs_dir).resolve()
+    out = write_eval_compare(runs, task_id=task, output_dir=output_dir)
+    typer.echo(f"Wrote comparison to {out}/")
+    typer.echo("  comparison_report.md")
+    typer.echo("  comparison_table.csv")
+
+
+@eval_app.command("breakdown")
+def eval_breakdown(
+    by: str | None = typer.Option(
+        None,
+        "--by",
+        help="Group by: failure_mode, difficulty, failure_category, failure_stage",
+    ),
+    runs_dir: Path = typer.Option(
+        Path("runs"),
+        "--runs-dir",
+        help="Directory containing per-task run outputs",
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "-o",
+        "--output-dir",
+        help="Output directory (default: runs/eval/summary)",
+    ),
+) -> None:
+    """Regenerate failure breakdown with failure_mode / difficulty tags."""
+    root = find_project_root().resolve()
+    runs = (runs_dir if runs_dir.is_absolute() else root / runs_dir).resolve()
+    out_dir = (output_dir or runs / "eval" / "summary").resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    from repopilot.eval.failure_analysis import BY_FIELDS, render_tag_breakdown, tag_breakdown
+    from repopilot.eval.loader import load_all_runs
+
+    if by and by not in BY_FIELDS:
+        allowed = ", ".join(sorted(BY_FIELDS))
+        raise typer.BadParameter(f"Unknown --by {by!r}; choose from: {allowed}")
+
+    records = load_all_runs(runs)
+    if not records:
+        raise typer.BadParameter(f"No runs with trace.json found under {runs}")
+    (out_dir / "failure_breakdown.md").write_text(render_tag_breakdown(tag_breakdown(records), by=by))
+    typer.echo(f"Wrote {out_dir / 'failure_breakdown.md'}")
+
+
+@eval_app.command("view")
+def eval_view(
+    run: Path = typer.Argument(..., help="Task id (e.g. task_001_sudoku) or path to run directory"),
+    runs_dir: Path = typer.Option(
+        Path("runs"),
+        "--runs-dir",
+        help="Runs root when passing a task id",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "-o",
+        "--output",
+        help="HTML output path (default: runs/eval/{task_id}/view.html)",
+    ),
+    open_browser: bool = typer.Option(False, "--open", help="Open the report in your default browser"),
+) -> None:
+    """Render an HTML trajectory view for one run."""
+    root = find_project_root().resolve()
+    runs = (runs_dir if runs_dir.is_absolute() else root / runs_dir).resolve()
+
+    run_path = run if run.is_absolute() else (root / run).resolve()
+    if run_path.is_dir() and (run_path / "trace.json").is_file():
+        run_dir = run_path
+    else:
+        task_id = run.name if run.name else str(run)
+        resolved = resolve_task_run_dir(runs, task_id)
+        if resolved is None:
+            raise typer.BadParameter(f"No run found for {run!r} under {runs}")
+        run_dir = resolved
+
+    record = load_run_record(run_dir)
+    out = write_run_view(record, output)
+    typer.echo(f"Wrote {out}")
+    if open_browser:
+        open_run_view(out)
+        typer.echo("Opened in browser.")
 
 
 if __name__ == "__main__":
