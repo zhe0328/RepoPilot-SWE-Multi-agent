@@ -70,6 +70,26 @@ print(task.agent.resolve_output_trajectory(task.task_id))
 
 Multi-bug tasks use `eval.failure_mode: composite` and `eval.bug_count`. The issue prompt tells the agent to fix **all** injected bugs, not just the first failure.
 
+### Adhoc tasks (user-reported bugs — not in benchmark suite)
+
+Adhoc tasks live under `benchmarks/adhoc_<name>/`. They use **no `setup.patch`** — buggy code is committed in `fixture/` at `base_commit`. Repro tests are pre-authored under `fixture/tests/test_repro.py`.
+
+| ID | Description | Tags |
+|----|-------------|------|
+| `adhoc_parser_empty` | Empty CSV input raises instead of returning `[]` | `adhoc`, `tests_preexisting` |
+
+Copy [`_template_adhoc/`](_template_adhoc/) to create new cases. Full walkthrough: [`adhoc_parser_empty/README.md`](adhoc_parser_empty/README.md).
+
+```bash
+# After committing the adhoc task directory:
+python benchmarks/adhoc_parser_empty/pin_base_commit.py
+
+repopilot run adhoc_parser_empty --skip-mini   # expect verify fail
+repopilot run adhoc_parser_empty               # agent demo
+```
+
+**Eval:** Adhoc runs write to `runs/adhoc_<name>/`. Until Adhoc Phase B, do **not** mix them into benchmark success-rate reporting when running `repopilot eval summary`.
+
 ### task_001_sudoku
 
 - **Repo:** this repository (`.`)
