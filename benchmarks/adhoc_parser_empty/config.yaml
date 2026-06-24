@@ -5,7 +5,7 @@ repo:
   path: .
   # No setup.patch — buggy code is committed in fixture/ at this commit.
   # Run: python benchmarks/adhoc_parser_empty/pin_base_commit.py after committing.
-  base_commit: "e1127bbf250eb8b6fdc012340c715978b87f9df1"
+  base_commit: "f10b07d4b7b4007912e0340b969ba2a4d8888e25"
 
 eval:
   failure_mode: adhoc
