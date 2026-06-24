@@ -99,12 +99,12 @@ def load_task(task_dir: Path) -> TaskConfig:
 
 
 def discover_tasks(benchmarks_root: Path) -> list[Path]:
-    """Return task directories containing config.yaml, sorted by name."""
+    """Return formal benchmark task dirs (`task_*`) containing config.yaml."""
     benchmarks_root = benchmarks_root.resolve()
     if not benchmarks_root.is_dir():
         return []
     return sorted(
         path.parent
-        for path in benchmarks_root.glob("*/config.yaml")
+        for path in benchmarks_root.glob("task_*/config.yaml")
         if path.parent.is_dir()
     )

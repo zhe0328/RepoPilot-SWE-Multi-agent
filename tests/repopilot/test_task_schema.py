@@ -71,6 +71,16 @@ def test_discover_tasks_count():
     assert len(tasks) == 14
 
 
+def test_load_adhoc_parser_empty():
+    task = load_task(BENCHMARKS / "adhoc_parser_empty")
+    assert task.task_id == "adhoc_parser_empty"
+    assert task.repo.setup_patch is None
+    assert task.eval.failure_mode == "adhoc"
+    assert "adhoc" in task.eval.tags
+    assert "tests_preexisting" in task.eval.tags
+    assert task.setup_patch_path() is None
+
+
 @pytest.mark.parametrize(
     "task_id,bug_count",
     [

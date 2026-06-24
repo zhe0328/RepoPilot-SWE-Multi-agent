@@ -6,7 +6,7 @@ Copy this directory to `benchmarks/adhoc_<name>/` and customize.
 
 ```text
 benchmarks/adhoc_<name>/
-  config.yaml           # no setup.patch; pin base_commit after commit
+  config.yaml           # copy from config.yaml.example; no setup.patch
   issue.md              # user symptom + instructions
   pin_base_commit.py    # copy from adhoc_parser_empty
   fixture/
@@ -18,7 +18,8 @@ benchmarks/adhoc_<name>/
 
 ## Checklist
 
-1. Copy `_template_adhoc` → `adhoc_<name>`; rename `adhoc_EXAMPLE` paths in config/issue
+1. Copy `_template_adhoc` → `adhoc_<name>`; copy `config.yaml.example` → `config.yaml`
+2. Rename `adhoc_EXAMPLE` paths in config/issue
 2. Put **buggy** code under `fixture/` (no setup.patch)
 3. Write `fixture/tests/test_repro.py` (1–3 cases that fail before fix)
 4. Commit the task directory
