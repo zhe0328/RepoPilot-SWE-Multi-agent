@@ -6,8 +6,14 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from repopilot.eval.adhoc import partition_runs
 from repopilot.eval.compare import DEFAULT_PAIRS, comparison_rows, render_comparison_report, write_comparison_csv
-from repopilot.eval.failure_analysis import render_tag_breakdown, tag_breakdown
+from repopilot.eval.failure_analysis import (
+    adhoc_tag_breakdown,
+    render_adhoc_breakdown_section,
+    render_tag_breakdown,
+    tag_breakdown,
+)
 from repopilot.eval.loader import RunRecord, load_all_runs, load_task_runs
 from repopilot.eval.metrics import aggregate_runs, run_records_table
 from repopilot.eval.trajectory_analysis import render_trajectory_analysis
@@ -19,13 +25,24 @@ def _render_eval_report(
     metrics: dict,
     breakdown: dict,
     runs_dir: Path,
+    *,
+    scope: str = "benchmark",
+    adhoc_metrics: dict | None = None,
+    adhoc_records: list[RunRecord] | None = None,
 ) -> str:
+    scope_label = {
+        "benchmark": "benchmark tasks only (`task_*`)",
+        "adhoc": "adhoc tasks only (`adhoc_*`)",
+        "all": "benchmark + adhoc",
+    }.get(scope, scope)
+
     lines = [
         "# RepoPilot Evaluation Summary",
         "",
         f"- **Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
         f"- **Runs directory:** `{runs_dir}`",
-        f"- **Total runs:** {metrics['total_runs']}",
+        f"- **Scope:** {scope_label}",
+        f"- **Total runs (in scope):** {metrics['total_runs']}",
         "",
         "## Aggregate metrics",
         "",
@@ -91,6 +108,29 @@ def _render_eval_report(
             outcomes = breakdown.get("outcome_by_failure_mode", {}).get(mode, {})
             lines.append(
                 f"- `{mode}`: {count} — {outcomes.get('success', 0)} success, {outcomes.get('failure', 0)} failure"
+            )
+        lines.append("")
+
+    if adhoc_metrics and adhoc_records is not None:
+        lines.extend(
+            [
+                "## Adhoc runs (separate bucket — excluded from benchmark metrics above)",
+                "",
+                f"- **Adhoc runs:** {adhoc_metrics['total_runs']}",
+                f"- **Success rate:** {adhoc_metrics['success_count']}/{adhoc_metrics['total_runs']} "
+                f"({adhoc_metrics['success_rate']}%)",
+                f"- **Verify pass rate:** {adhoc_metrics['verify_pass_count']}/{adhoc_metrics['total_runs']} "
+                f"({adhoc_metrics['verify_pass_rate']}%)",
+                f"- **Avg cost:** ${adhoc_metrics['avg_cost']:.4f}",
+                "",
+                "| task_id | mode | outcome | verify | cost |",
+                "|---------|------|---------|--------|-----:|",
+            ]
+        )
+        for row in run_records_table(adhoc_records):
+            verify = "yes" if row["tests_passed"] is True else "no" if row["tests_passed"] is False else "?"
+            lines.append(
+                f"| {row['task_id']} | {row['agent_mode']} | {row['outcome']} | {verify} | ${row['cost']:.4f} |"
             )
         lines.append("")
 
@@ -175,35 +215,78 @@ def _render_task_summary(record: RunRecord) -> str:
 def write_eval_summary(
     runs_dir: Path,
     output_dir: Path | None = None,
+    *,
+    benchmark_only: bool = True,
+    adhoc_only: bool = False,
+    include_adhoc: bool = False,
 ) -> Path:
     runs_dir = runs_dir.resolve()
     output_dir = (output_dir or runs_dir / "eval" / "summary").resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    records = load_all_runs(runs_dir)
-    if not records:
+    all_records = load_all_runs(runs_dir)
+    if not all_records:
         raise FileNotFoundError(f"No runs with trace.json found under {runs_dir}")
+
+    benchmark_records, adhoc_records = partition_runs(all_records)
+
+    if adhoc_only:
+        records = adhoc_records
+        scope = "adhoc"
+    elif include_adhoc:
+        records = all_records
+        scope = "all"
+    else:
+        records = benchmark_records
+        scope = "benchmark"
+
+    if not records:
+        label = "adhoc" if adhoc_only else "benchmark"
+        raise FileNotFoundError(f"No {label} runs with trace.json found under {runs_dir}")
 
     metrics = aggregate_runs(records)
     breakdown = tag_breakdown(records)
     rows = comparison_rows(records)
 
-    (output_dir / "eval_report.md").write_text(_render_eval_report(records, metrics, breakdown, runs_dir))
+    adhoc_metrics = aggregate_runs(adhoc_records) if adhoc_records and scope == "benchmark" else None
+    adhoc_breakdown = adhoc_tag_breakdown(adhoc_records) if adhoc_records and scope == "benchmark" else None
+
+    failure_md = render_tag_breakdown(breakdown)
+    if adhoc_breakdown and adhoc_records:
+        failure_md = failure_md.rstrip() + "\n\n" + render_adhoc_breakdown_section(adhoc_breakdown)
+
+    (output_dir / "eval_report.md").write_text(
+        _render_eval_report(
+            records,
+            metrics,
+            breakdown,
+            runs_dir,
+            scope=scope,
+            adhoc_metrics=adhoc_metrics,
+            adhoc_records=adhoc_records if scope == "benchmark" else None,
+        )
+    )
     (output_dir / "metrics.json").write_text(
         json.dumps(
             {
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "runs_dir": str(runs_dir),
+                "scope": scope,
                 "metrics": metrics,
+                "adhoc_metrics": adhoc_metrics,
                 "runs": run_records_table(records),
+                "adhoc_runs": run_records_table(adhoc_records) if adhoc_records else [],
                 "comparison": rows,
                 "breakdown": {k: v for k, v in breakdown.items() if k != "examples"},
+                "adhoc_breakdown": (
+                    {k: v for k, v in adhoc_breakdown.items() if k != "examples"} if adhoc_breakdown else None
+                ),
             },
             indent=2,
         )
         + "\n"
     )
-    (output_dir / "failure_breakdown.md").write_text(render_tag_breakdown(breakdown))
+    (output_dir / "failure_breakdown.md").write_text(failure_md)
     write_comparison_csv(rows, output_dir / "comparison_table.csv")
 
     compare_dir = runs_dir / "eval" / "compare"
@@ -223,19 +306,41 @@ def write_eval_summary(
     return output_dir
 
 
+def write_eval_summary_legacy(
+    runs_dir: Path,
+    output_dir: Path | None = None,
+) -> Path:
+    """All runs in one aggregate (legacy include-adhoc behavior)."""
+    return write_eval_summary(runs_dir, output_dir, include_adhoc=True)
+
+
 def write_eval_compare(
     runs_dir: Path,
     *,
     task_id: str | None = None,
     output_dir: Path | None = None,
+    benchmark_only: bool = True,
+    adhoc_only: bool = False,
+    include_adhoc: bool = False,
 ) -> Path:
     runs_dir = runs_dir.resolve()
     output_dir = (output_dir or runs_dir / "eval" / "compare").resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    records = load_all_runs(runs_dir)
-    if not records:
+    all_records = load_all_runs(runs_dir)
+    if not all_records:
         raise FileNotFoundError(f"No runs with trace.json found under {runs_dir}")
+
+    benchmark_records, adhoc_records = partition_runs(all_records)
+    if adhoc_only:
+        records = adhoc_records
+    elif include_adhoc:
+        records = all_records
+    else:
+        records = benchmark_records
+
+    if not records:
+        raise FileNotFoundError(f"No runs in selected scope under {runs_dir}")
 
     if task_id:
         task_records = load_task_runs(runs_dir, task_id)

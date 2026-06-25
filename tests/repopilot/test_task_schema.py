@@ -76,9 +76,22 @@ def test_load_adhoc_parser_empty():
     assert task.task_id == "adhoc_parser_empty"
     assert task.repo.setup_patch is None
     assert task.eval.failure_mode == "adhoc"
+    assert task.eval.verify_tier == "strict"
     assert "adhoc" in task.eval.tags
     assert "tests_preexisting" in task.eval.tags
     assert task.setup_patch_path() is None
+
+
+def test_load_adhoc_parser_generated():
+    task_dir = BENCHMARKS / "adhoc_parser_generated"
+    if not task_dir.is_dir():
+        pytest.skip("requires adhoc_parser_generated")
+    task = load_task(task_dir)
+    assert task.task_id == "adhoc_parser_generated"
+    assert task.repo.setup_patch is None
+    assert "tests_generated" in task.eval.tags
+    assert "tests_preexisting" not in task.eval.tags
+    assert not (task_dir / "fixture" / "tests").exists()
 
 
 @pytest.mark.parametrize(

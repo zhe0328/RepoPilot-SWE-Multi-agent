@@ -38,9 +38,14 @@ repopilot run adhoc_parser_empty
 repopilot eval view adhoc_parser_empty --open
 ```
 
-## Eval note (until Adhoc Phase B)
+## Eval note
 
-Outputs go to `runs/adhoc_parser_empty/`. **`repopilot eval summary` will include this run** alongside benchmark tasks. Treat adhoc separately when reporting benchmark success rates, or omit this directory before aggregating.
+```bash
+repopilot eval summary              # benchmark metrics; adhoc shown separately
+repopilot eval view adhoc_parser_empty --open
+```
+
+Adhoc runs are excluded from benchmark `success_rate` by default (Adhoc Phase B).
 
 ## Expected fix
 

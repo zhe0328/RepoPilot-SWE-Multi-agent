@@ -10,6 +10,7 @@ repo:
 eval:
   failure_mode: adhoc
   difficulty: user_reported
+  verify_tier: strict
   tags:
     - adhoc
     - tests_preexisting

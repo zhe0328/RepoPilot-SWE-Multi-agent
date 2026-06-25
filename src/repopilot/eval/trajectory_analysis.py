@@ -78,7 +78,7 @@ def render_trajectory_analysis(record: RunRecord) -> str:
     lines.append("")
 
     if record.steps:
-        lines.extend(["## Trajectory timeline (Mermaid)", "", render_mermaid_timeline(record), ""])
+        lines.extend(["## Trajectory (Mermaid)", "", render_mermaid_timeline(record)])
 
     if metrics["stages"]:
         lines.extend(["## Step stages", "", " → ".join(f"`{s}`" for s in metrics["stages"]), ""])

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from repopilot.runner.generated_tests import assess_generated_tests
+from repopilot.runner.repo_resolve import resolve_repository
 from repopilot.schema import TaskConfig, load_task
 from repopilot.trace import TraceContext, record_trace
 from repopilot.trace.parse import capture_workspace_diff
@@ -30,6 +32,7 @@ class RunResult:
     test_exit_code: int
     tests_passed: bool
     mini_command: list[str]
+    generated_tests: dict[str, object] | None = None
 
 
 def find_project_root(start: Path | None = None) -> Path:
@@ -63,7 +66,8 @@ def resolve_repo_path(task: TaskConfig, project_root: Path) -> Path:
         return repo.resolve() if repo.is_absolute() else (project_root / repo).resolve()
     if task.repo.repo_url is None:
         raise ValueError("repo.path or repo.repo_url must be set")
-    raise NotImplementedError("Cloning repo_url is not implemented yet (Phase 1.5 supports repo.path only)")
+    cache_root = project_root / "runs" / ".cache" / "repos"
+    return resolve_repository(task.repo.repo_url, cache_root=cache_root)
 
 
 def build_mini_command(task: TaskConfig, trajectory_path: Path) -> list[str]:
@@ -187,6 +191,8 @@ def write_run_meta(result: RunResult, *, started_at: datetime, finished_at: date
         "started_at": started_at.isoformat(),
         "finished_at": finished_at.isoformat(),
     }
+    if result.generated_tests:
+        payload["generated_tests"] = result.generated_tests
     meta_path.write_text(yaml.safe_dump(payload, sort_keys=False))
     return meta_path
 
@@ -199,6 +205,7 @@ def run_benchmark_task(
     restore_workspace: bool = True,
     dry_run: bool = False,
     force_baseline: bool = False,
+    output_dir: Path | None = None,
 ) -> RunResult:
     started_at = datetime.now(timezone.utc)
     task = load_task(task_dir)
@@ -209,8 +216,9 @@ def run_benchmark_task(
 
     root = (project_root or find_project_root(task_dir)).resolve()
     repo_path = resolve_repo_path(task, root)
-    output_dir = (root / "runs" / task.task_id).resolve()
-    trajectory_path = (root / task.agent.resolve_output_trajectory(task.task_id)).resolve()
+    output_dir = (output_dir or (root / "runs" / task.task_id)).resolve()
+    trajectory_rel = task.agent.resolve_output_trajectory(task.task_id)
+    trajectory_path = trajectory_rel if trajectory_rel.is_absolute() else (output_dir / trajectory_rel.name)
     verify_log = output_dir / "verify_test.log"
     mini_command = build_mini_command(task, trajectory_path)
 
@@ -238,6 +246,7 @@ def run_benchmark_task(
         )
 
     mini_exit_code: int | None = None
+    generated_tests: dict[str, object] | None = None
     with isolated_workspace(
         repo_path,
         task.repo.base_commit,
@@ -253,6 +262,7 @@ def run_benchmark_task(
         test_exit_code = run_verification(task, workspace, verify_log)
         tests_passed = test_exit_code == 0
         workspace_patch = capture_workspace_diff(workspace)
+        generated_tests = assess_generated_tests(task, workspace_patch, tests_passed=tests_passed)
 
         if trajectory_path.is_file():
             extract_baseline_artifacts(
@@ -275,6 +285,7 @@ def run_benchmark_task(
                     difficulty=task.eval.difficulty,
                     bug_count=task.eval.bug_count,
                     eval_tags=task.eval.tags or None,
+                    verify_tier=task.eval.verify_tier,
                     workspace_patch=workspace_patch,
                 ),
             )
@@ -291,6 +302,7 @@ def run_benchmark_task(
         test_exit_code=test_exit_code,
         tests_passed=tests_passed,
         mini_command=mini_command,
+        generated_tests=generated_tests,
     )
     write_run_meta(result, started_at=started_at, finished_at=finished_at)
     return result

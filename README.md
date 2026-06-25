@@ -103,7 +103,8 @@ Each task directory contains `config.yaml`, `issue.md`, and optional `setup.patc
 Run outputs per task:
 
 ```text
-runs/{task_id}/
+runs/{task_id}/              # benchmark tasks (task_*)
+runs/adhoc/{task_id}/        # ephemeral adhoc CLI runs (Phase C)
   trajectory.traj.json   # upstream mini trajectory
   trace.json             # structured trace (schema v2)
   patch.diff             # extracted patch
@@ -117,9 +118,13 @@ runs/{task_id}/
 
 ```bash
 repopilot run <task_id> [--dry-run] [--skip-mini] [--no-restore]
+repopilot run --adhoc <repo> --issue issue.md --test-cmd "pytest -q"
+repopilot adhoc run <repo> issue.md --test-cmd "pytest -q" [--commit SHA]
 repopilot trace <trajectory.traj.json> [-o output_dir]
 
-repopilot eval summary [--runs-dir runs]
+repopilot eval summary [--runs-dir runs]   # benchmark only by default
+repopilot eval summary --adhoc-only        # adhoc bucket only
+repopilot eval summary --include-adhoc     # merge all runs
 repopilot eval compare [--task task_id] [--runs-dir runs]
 repopilot eval breakdown [--by failure_mode|difficulty|bug_count|failure_category|failure_stage]
 ```

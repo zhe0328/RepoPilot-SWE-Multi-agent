@@ -143,12 +143,63 @@ def test_write_eval_summary(tmp_path, sample_run):
     out = write_eval_summary(tmp_path, output_dir=tmp_path / "eval" / "summary")
     assert (out / "eval_report.md").is_file()
     assert (out / "metrics.json").is_file()
+    report = (out / "eval_report.md").read_text()
+    assert "Scope:" in report
+    assert "benchmark tasks only" in report
+    metrics = json.loads((out / "metrics.json").read_text())
+    assert metrics["scope"] == "benchmark"
     assert (out / "failure_breakdown.md").is_file()
     assert (out / "comparison_table.csv").is_file()
     assert (tmp_path / "eval" / "compare" / "comparison_report.md").is_file()
     assert (tmp_path / "eval" / "task_sample" / "run_summary.md").is_file()
     assert (tmp_path / "eval" / "task_sample" / "trajectory_analysis.md").is_file()
     assert (tmp_path / "eval" / "task_sample" / "view.html").is_file()
+
+
+def test_eval_summary_excludes_adhoc_from_benchmark_metrics(tmp_path, sample_run):
+    adhoc_dir = tmp_path / "adhoc_parser_empty"
+    adhoc_dir.mkdir()
+    trace = _minimal_trace("adhoc_parser_empty")
+    trace["task_tags"] = {
+        "failure_mode": "adhoc",
+        "difficulty": "user_reported",
+        "tags": ["adhoc", "tests_preexisting"],
+        "verify_tier": "strict",
+        "tests_authored_by": "preexisting",
+    }
+    (adhoc_dir / "trace.json").write_text(json.dumps(trace))
+    (adhoc_dir / "run_meta.yaml").write_text(
+        yaml.safe_dump({"task_id": "adhoc_parser_empty", "tests_passed": True, "test_exit_code": 0})
+    )
+
+    out = write_eval_summary(tmp_path, output_dir=tmp_path / "eval" / "summary")
+    metrics = json.loads((out / "metrics.json").read_text())
+    assert metrics["scope"] == "benchmark"
+    assert metrics["metrics"]["total_runs"] == 1
+    assert metrics["adhoc_metrics"]["total_runs"] == 1
+    report = (out / "eval_report.md").read_text()
+    assert "Adhoc runs (separate bucket" in report
+    assert "adhoc_parser_empty" in report
+    breakdown = (out / "failure_breakdown.md").read_text()
+    assert "Adhoc runs (separate bucket)" in breakdown
+
+
+def test_partition_runs(sample_run):
+    from repopilot.eval.adhoc import is_adhoc_record, partition_runs
+
+    benchmark = load_run_record(sample_run)
+    adhoc = RunRecord(
+        task_id="adhoc_parser_empty",
+        agent_mode="baseline",
+        model="m",
+        run_dir=Path("."),
+        eval_tags=["adhoc", "tests_preexisting"],
+        failure_mode="adhoc",
+    )
+    assert is_adhoc_record(adhoc)
+    assert not is_adhoc_record(benchmark)
+    b, a = partition_runs([benchmark, adhoc])
+    assert len(b) == 1 and len(a) == 1
 
 
 def test_trajectory_metrics(sample_run):

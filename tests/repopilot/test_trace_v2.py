@@ -42,17 +42,62 @@ p.write_text(text.replace(old, new))
 PY
 """
 
+HEREDOC_WRITE_TEST_FILE = """\
+cat <<'EOF' > backend/tests/api/test_chat_auth_routes.py
+import pytest
+def test_unauthorized():
+    pass
+PYTHONPATH=backend pytest -q backend/tests/api/test_repro.py
+EOF
+"""
+
+HEREDOC_EDIT_WITH_PYTEST_IN_BODY = """\
+python3 - <<'PY'
+from pathlib import Path
+p = Path('backend/app/api/main.py')
+text = p.read_text()
+# run pytest later: pytest -q
+p.write_text(text.replace("old", "new"))
+PY
+"""
+
+COMBINED_EDIT_AND_PYTEST = """\
+python3 - <<'PY'
+from pathlib import Path
+p = Path('backend/tests/api/test_x.py')
+p.write_text("x")
+PY
+PYTHONPATH=backend pytest -q backend/tests/api/test_x.py
+"""
+
 
 def test_classify_command_stage():
     assert classify_command_stage("python -m pytest tests/ -v") == "test"
+    assert classify_command_stage("PYTHONPATH=backend pytest -q backend/tests/") == "test"
     assert classify_command_stage("path.write_text('x')") == "edit"
     assert classify_command_stage(TASK_003_FIX_CMD) == "edit"
+    assert classify_command_stage(HEREDOC_WRITE_TEST_FILE) == "edit"
+    assert classify_command_stage(HEREDOC_EDIT_WITH_PYTEST_IN_BODY) == "edit"
+    assert classify_command_stage(COMBINED_EDIT_AND_PYTEST) == "edit"
     assert classify_command_stage("cat upstream/src/foo.py") == "read"
     assert classify_command_stage("git diff") == "submit"
+    assert classify_command_stage("echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT") == "submit"
+
+
+def test_classify_command_stage_pytest_not_in_heredoc_body():
+    cmd = """\
+python3 - <<'PY'
+doc = "see backend/tests/api/test_foo.py and pytest docs"
+Path('x.py').write_text(doc)
+PY
+"""
+    assert classify_command_stage(cmd) == "edit"
+    assert classify_command_stage("nl -ba backend/tests/conftest.py") == "read"
 
 
 def test_is_edit_command_detects_heredoc_replace():
     assert is_edit_command(TASK_003_FIX_CMD)
+    assert is_edit_command(HEREDOC_WRITE_TEST_FILE)
     assert not is_edit_command("pytest upstream/tests/run/test_expr.py -v")
     assert not is_edit_command("git diff")
 
@@ -63,6 +108,12 @@ def test_infer_step_stage():
         ToolCallRecord(command="cat foo.py", returncode=0),
     ]
     assert infer_step_stage(calls) == "test"
+
+    edit_then_test = [
+        ToolCallRecord(command=TASK_003_FIX_CMD, returncode=0),
+        ToolCallRecord(command="pytest -v", returncode=0),
+    ]
+    assert infer_step_stage(edit_then_test) == "edit"
 
 
 def test_extract_files_touched():
@@ -311,3 +362,27 @@ def test_extract_patch_merges_multiple_git_diff_outputs():
     assert source == "git diff in trajectory (merged)"
     assert "fix-tokenize" in patch
     assert "fix-evaluate" in patch
+
+
+def test_analyze_patch_test_files_detects_added_tests():
+    from repopilot.trace.parse import analyze_patch_test_files
+
+    patch = (
+        "diff --git a/benchmarks/adhoc/fixture/tests/test_repro.py "
+        "b/benchmarks/adhoc/fixture/tests/test_repro.py\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/benchmarks/adhoc/fixture/tests/test_repro.py\n"
+        "@@ -0,0 +1,2 @@\n"
+        "+def test_x():\n"
+        "+    pass\n"
+        "diff --git a/src/foo.py b/src/foo.py\n"
+        "--- a/src/foo.py\n"
+        "+++ b/src/foo.py\n"
+        "@@ -1 +1 @@\n"
+        "-bug\n"
+        "+fix\n"
+    )
+    meta = analyze_patch_test_files(patch)
+    assert meta["test_files_added"] == ["benchmarks/adhoc/fixture/tests/test_repro.py"]
+    assert "src/foo.py" not in meta["test_files_touched"]

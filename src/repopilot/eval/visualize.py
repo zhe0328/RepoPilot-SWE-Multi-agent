@@ -4,10 +4,21 @@ from __future__ import annotations
 
 import html
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 from repopilot.eval.loader import RunRecord
 from repopilot.trace.parse import extract_pytest_log
+
+
+@dataclass(frozen=True)
+class _StageRun:
+    stage: str
+    count: int
+    step_start: int
+    step_end: int
 
 
 def _mermaid_label(text: str, *, limit: int = 48) -> str:
@@ -17,8 +28,51 @@ def _mermaid_label(text: str, *, limit: int = 48) -> str:
     return cleaned.replace('"', "'")
 
 
+def _collapse_stage_runs(steps: list[dict]) -> list[_StageRun]:
+    runs: list[_StageRun] = []
+    for step in steps:
+        step_num = int(step.get("step") or 0)
+        stage = step.get("stage") or "other"
+        if runs and runs[-1].stage == stage:
+            prev = runs[-1]
+            runs[-1] = _StageRun(stage, prev.count + 1, prev.step_start, step_num)
+        else:
+            runs.append(_StageRun(stage, 1, step_num, step_num))
+    return runs
+
+
+def _stage_run_label(run: _StageRun, *, include_steps: bool = True) -> str:
+    name = run.stage if run.count == 1 else f"{run.stage} ×{run.count}"
+    if not include_steps:
+        return name
+    if run.step_start == run.step_end:
+        return f"{name}<br/>step {run.step_start}"
+    return f"{name}<br/>steps {run.step_start}-{run.step_end}"
+
+
+def _failed_stage_index(runs: list[_StageRun], failed_step: int | None) -> int | None:
+    if failed_step is None:
+        return None
+    for idx, run in enumerate(runs):
+        if run.step_start <= failed_step <= run.step_end:
+            return idx
+    return None
+
+
+_RETRY_AFTER_TEST = frozenset({"read", "edit", "plan", "other"})
+
+
+def _has_repair_pattern(record: RunRecord) -> bool:
+    if record.repair_rounds > 0:
+        return True
+    runs = _collapse_stage_runs(record.steps)
+    return any(
+        left.stage == "test" and right.stage in _RETRY_AFTER_TEST for left, right in zip(runs, runs[1:])
+    )
+
+
 def render_mermaid_source(record: RunRecord) -> str:
-    """Return Mermaid flowchart source (no fences)."""
+    """Return Mermaid flowchart source — one node per agent step (full linear)."""
     if not record.steps:
         return "flowchart LR\n    empty[No steps recorded]"
 
@@ -44,9 +98,91 @@ def render_mermaid_source(record: RunRecord) -> str:
     return "\n".join(lines)
 
 
+def render_mermaid_collapsed_timeline(record: RunRecord) -> str:
+    """Collapsed linear timeline — consecutive same-stage steps merged."""
+    if not record.steps:
+        return "flowchart LR\n    empty[No steps recorded]"
+
+    runs = _collapse_stage_runs(record.steps)
+    failed_idx = _failed_stage_index(runs, record.failed_step)
+    lines = ["flowchart LR"]
+    node_ids: list[str] = []
+
+    for idx, run in enumerate(runs):
+        node_id = f"c{idx}"
+        node_ids.append(node_id)
+        label = _mermaid_label(_stage_run_label(run))
+        lines.append(f'    {node_id}["{label}"]')
+
+    for left, right in zip(node_ids, node_ids[1:]):
+        lines.append(f"    {left} --> {right}")
+
+    if failed_idx is not None:
+        lines.append("    classDef failed fill:#fde8e8,stroke:#c0392b,stroke-width:2px")
+        lines.append(f"    class c{failed_idx} failed")
+
+    return "\n".join(lines)
+
+
+def render_mermaid_repair_loop(record: RunRecord) -> str:
+    """Phase-oriented timeline with retry edges after failed tests."""
+    if not record.steps:
+        return "flowchart LR\n    empty[No steps recorded]"
+
+    runs = _collapse_stage_runs(record.steps)
+    failed_idx = _failed_stage_index(runs, record.failed_step)
+    lines = ["flowchart LR"]
+    node_ids: list[str] = []
+
+    for idx, run in enumerate(runs):
+        node_id = f"p{idx}"
+        node_ids.append(node_id)
+        label = _mermaid_label(_stage_run_label(run))
+        lines.append(f'    {node_id}["{label}"]')
+
+    for idx in range(len(runs) - 1):
+        left_id = node_ids[idx]
+        right_id = node_ids[idx + 1]
+        if runs[idx].stage == "test" and runs[idx + 1].stage in _RETRY_AFTER_TEST:
+            lines.append(f"    {left_id} -. retry .-> {right_id}")
+        else:
+            lines.append(f"    {left_id} --> {right_id}")
+
+    if record.repair_rounds > 0:
+        lines.append(f'    meta["repair rounds: {record.repair_rounds}"]')
+        lines.append("    classDef meta fill:#1a2332,stroke:#58a6ff,stroke-width:1px,color:#8b949e")
+        lines.append("    class meta meta")
+        if node_ids:
+            lines.append(f"    {node_ids[-1]} -.-> meta")
+
+    if failed_idx is not None:
+        lines.append("    classDef failed fill:#fde8e8,stroke:#c0392b,stroke-width:2px")
+        lines.append(f"    class p{failed_idx} failed")
+
+    return "\n".join(lines)
+
+
 def render_mermaid_timeline(record: RunRecord) -> str:
-    """Render a fenced Mermaid block for markdown reports."""
-    return f"```mermaid\n{render_mermaid_source(record)}\n```\n"
+    """Render fenced Mermaid blocks for markdown reports."""
+    sections: list[str] = []
+    if _has_repair_pattern(record):
+        sections.extend(
+            [
+                "### Repair loop",
+                "",
+                f"```mermaid\n{render_mermaid_repair_loop(record)}\n```",
+                "",
+            ]
+        )
+    sections.extend(
+        [
+            "### Step timeline (collapsed)",
+            "",
+            f"```mermaid\n{render_mermaid_collapsed_timeline(record)}\n```",
+            "",
+        ]
+    )
+    return "\n".join(sections)
 
 
 def render_ascii_bar_chart(counts: dict[str, int], *, width: int = 32, title: str | None = None) -> str:
@@ -148,7 +284,8 @@ def render_run_html(record: RunRecord) -> str:
     from repopilot.eval.trajectory_analysis import trajectory_metrics
 
     metrics = trajectory_metrics(record)
-    mermaid = render_mermaid_source(record)
+    repair_loop = render_mermaid_repair_loop(record) if _has_repair_pattern(record) else ""
+    collapsed = render_mermaid_collapsed_timeline(record)
     patch = _read_optional(record.run_dir / "patch.diff")
     if patch.startswith("# No patch"):
         patch = ""
@@ -163,8 +300,16 @@ def render_run_html(record: RunRecord) -> str:
         ("Steps", metrics["step_count"]),
         ("Cost", f"${record.instance_cost:.4f}"),
         ("Steps to first edit", metrics["steps_to_first_edit"] or "—"),
+        ("Repair rounds", metrics["repair_rounds"] or "—"),
         ("Files touched", metrics["files_touched_count"]),
     ]
+    if record.tests_authored_by:
+        meta_rows.append(("Tests authored by", record.tests_authored_by))
+    if record.run_dir.joinpath("run_meta.yaml").is_file():
+        run_meta = yaml.safe_load(record.run_dir.joinpath("run_meta.yaml").read_text()) or {}
+        gen = run_meta.get("generated_tests") or {}
+        if gen.get("test_files_added"):
+            meta_rows.append(("Test files added", ", ".join(gen["test_files_added"])))
     if record.failure_category:
         meta_rows.extend(
             [
@@ -178,6 +323,15 @@ def render_run_html(record: RunRecord) -> str:
     meta_html = "".join(
         f"<tr><th>{html.escape(str(k))}</th><td>{html.escape(str(v))}</td></tr>" for k, v in meta_rows
     )
+
+    repair_section = ""
+    if repair_loop:
+        repair_section = f"""
+    <section>
+      <h2>Repair loop</h2>
+      <p class="hint">Dotted edges mark test → read/edit retries after a failing run.</p>
+      <div class="mermaid-wrap"><pre class="mermaid">{repair_loop}</pre></div>
+    </section>"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -203,6 +357,24 @@ def render_run_html(record: RunRecord) -> str:
     table.meta {{ width: 100%; border-collapse: collapse; font-size: .92rem; }}
     table.meta th {{ text-align: left; color: var(--muted); width: 11rem; padding: .35rem .5rem .35rem 0; vertical-align: top; }}
     table.meta td {{ padding: .35rem 0; }}
+    .hint {{ color: var(--muted); font-size: .88rem; margin: 0 0 .75rem; }}
+    details.collapsible > summary {{
+      cursor: pointer;
+      font-size: 1.1rem;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: .4rem;
+      margin-bottom: .75rem;
+      list-style: none;
+    }}
+    details.collapsible > summary::-webkit-details-marker {{ display: none; }}
+    details.collapsible > summary::before {{
+      content: '▸ ';
+      color: var(--muted);
+      font-weight: normal;
+    }}
+    details.collapsible[open] > summary::before {{ content: '▾ '; }}
+    details.collapsible[open] > summary {{ margin-bottom: .5rem; }}
     .mermaid-wrap {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; }}
     article.step {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: .75rem; }}
     article.step.failed {{ border-color: var(--fail); box-shadow: inset 3px 0 0 var(--fail); }}
@@ -225,11 +397,12 @@ def render_run_html(record: RunRecord) -> str:
     <section>
       <h2>Summary</h2>
       <table class="meta">{meta_html}</table>
-    </section>
-    <section>
-      <h2>Trajectory timeline</h2>
-      <div class="mermaid-wrap"><pre class="mermaid">{mermaid}</pre></div>
-    </section>
+    </section>{repair_section}
+    <details class="collapsible" data-lazy-mermaid>
+      <summary>Step timeline</summary>
+      <p class="hint">Consecutive steps with the same stage are merged (e.g. read ×3).</p>
+      <div class="mermaid-wrap"><pre class="mermaid">{collapsed}</pre></div>
+    </details>
     <section>
       <h2>Agent steps</h2>
       {_steps_html(record)}
@@ -245,7 +418,19 @@ def render_run_html(record: RunRecord) -> str:
   </main>
   <script type="module">
     import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-    mermaid.initialize({{ startOnLoad: true, theme: 'dark', securityLevel: 'strict' }});
+    mermaid.initialize({{ startOnLoad: false, theme: 'dark', securityLevel: 'strict' }});
+
+    async function renderMermaidIn(root) {{
+      const nodes = root.querySelectorAll('.mermaid:not([data-processed])');
+      if (nodes.length) await mermaid.run({{ nodes }});
+    }}
+
+    await renderMermaidIn(document);
+    document.querySelectorAll('details[data-lazy-mermaid]').forEach((details) => {{
+      details.addEventListener('toggle', () => {{
+        if (details.open) renderMermaidIn(details);
+      }});
+    }});
   </script>
 </body>
 </html>

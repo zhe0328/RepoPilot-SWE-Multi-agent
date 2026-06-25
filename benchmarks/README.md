@@ -77,6 +77,7 @@ Adhoc tasks live under `benchmarks/adhoc_<name>/`. They use **no `setup.patch`**
 | ID | Description | Tags |
 |----|-------------|------|
 | `adhoc_parser_empty` | Empty CSV input raises instead of returning `[]` | `adhoc`, `tests_preexisting` |
+| `adhoc_parser_generated` | Same bug; **agent writes** repro pytest (Phase D) | `adhoc`, `tests_generated` |
 
 Copy [`_template_adhoc/`](_template_adhoc/) to create new cases. Full walkthrough: [`adhoc_parser_empty/README.md`](adhoc_parser_empty/README.md).
 
@@ -88,7 +89,51 @@ repopilot run adhoc_parser_empty --skip-mini   # expect verify fail
 repopilot run adhoc_parser_empty               # agent demo
 ```
 
-**Eval:** Adhoc runs write to `runs/adhoc_<name>/`. Until Adhoc Phase B, do **not** mix them into benchmark success-rate reporting when running `repopilot eval summary`.
+**Phase C — ephemeral adhoc runs** (no `benchmarks/` task directory):
+
+```bash
+# Subcommand (outputs under runs/adhoc/{task_id}/)
+repopilot adhoc run benchmarks/adhoc_parser_empty/fixture \
+  benchmarks/adhoc_parser_empty/issue.md \
+  --test-cmd 'PYTHONPATH=benchmarks/adhoc_parser_empty/fixture python -m pytest benchmarks/adhoc_parser_empty/fixture/tests/test_repro.py -v'
+
+# Same via repopilot run --adhoc
+repopilot run --adhoc benchmarks/adhoc_parser_empty/fixture \
+  --issue benchmarks/adhoc_parser_empty/issue.md \
+  --test-cmd 'PYTHONPATH=... python -m pytest .../test_repro.py -v'
+
+# Remote repo (cached under runs/.cache/repos/)
+repopilot adhoc run https://github.com/org/repo.git issue.md --test-cmd "pytest -q" --commit main
+```
+
+Local paths that are not git repos are copied and snapshotted into the cache before the run.
+
+**Eval:** By default, adhoc runs are **excluded** from benchmark success-rate aggregates:
+
+```bash
+repopilot eval summary              # benchmark only (task_*); adhoc in separate section
+repopilot eval summary --adhoc-only # adhoc bucket only
+repopilot eval summary --include-adhoc  # merge all runs (legacy)
+```
+
+### Adhoc eval tags
+
+| Tag | Meaning |
+|-----|---------|
+| `adhoc` | User-reported task (not in formal benchmark suite) |
+| `tests_preexisting` | Repro tests written before agent run (Phase A) |
+| `tests_generated` | Agent must author repro tests during the run (Phase D) |
+
+**Phase D** (`adhoc_parser_generated`): no `fixture/tests/` at `base_commit`. Issue instructs the agent to create `test_repro.py`. Runner records `tests_authored_by: agent` and validates test files appear in the patch when verify passes. See [`adhoc_parser_generated/README.md`](adhoc_parser_generated/README.md).
+
+### verify_tier
+
+| Value | Use when |
+|-------|----------|
+| `strict` (default) | Full pytest suite — preferred for execution-grounded verify |
+| `smoke` | Weak verify only: `python -m py_compile …`, `python -c "…"`, small smoke scripts |
+
+Record `verify_tier: smoke` in `config.yaml` for adhoc tasks without a full test suite. Trace stores the tier in `task_tags.verify_tier`.
 
 ### task_001_sudoku
 

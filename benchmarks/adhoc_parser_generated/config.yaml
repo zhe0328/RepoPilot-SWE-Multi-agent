@@ -4,7 +4,7 @@ description: User-reported empty CSV bug — agent must write repro tests (Adhoc
 repo:
   path: .
   # Commit fixture/ WITHOUT tests/, then: python benchmarks/adhoc_parser_generated/pin_base_commit.py
-  base_commit: "REPLACE_WITH_git_rev-parse_HEAD"
+  base_commit: "ddf2ee81fc7600b3249b1920b927ce61516e5bad"
 
 eval:
   failure_mode: adhoc

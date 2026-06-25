@@ -10,9 +10,10 @@ repo:
 eval:
   failure_mode: adhoc
   difficulty: user_reported
+  verify_tier: strict   # strict | smoke — see benchmarks/README.md
   tags:
     - adhoc
-    - tests_preexisting   # or tests_generated when agent writes repro tests (Phase D)
+    - tests_preexisting   # or tests_generated (Phase D)
 
 issue_file: issue.md
 

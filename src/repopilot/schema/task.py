@@ -28,7 +28,10 @@ class EvalTags(BaseModel):
     difficulty: str | None = None
     bug_count: int | None = None
     expected_repair_rounds: int | None = None
+    verify_tier: Literal["strict", "smoke"] | None = None
+    """strict: full pytest suite (default). smoke: weak verify (py_compile, python -c, etc.)."""
     tags: list[str] = Field(default_factory=list)
+    """Common adhoc tags: adhoc, tests_preexisting, tests_generated."""
 
 
 class AgentConfig(BaseModel):

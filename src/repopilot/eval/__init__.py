@@ -1,5 +1,6 @@
 """Evaluation harness (Phase 2.5 / 4)."""
 
+from repopilot.eval.adhoc import is_adhoc_record, partition_runs
 from repopilot.eval.compare import comparison_rows, render_comparison_report, write_comparison_csv
 from repopilot.eval.failure_analysis import (
     BY_FIELDS,
@@ -26,6 +27,8 @@ from repopilot.eval.visualize import (
     open_run_view,
     render_ascii_bar_chart,
     render_failure_distribution_charts,
+    render_mermaid_collapsed_timeline,
+    render_mermaid_repair_loop,
     render_mermaid_source,
     render_mermaid_timeline,
     render_run_html,
@@ -44,13 +47,17 @@ __all__ = [
     "discover_run_dirs",
     "extract_failure_snippet",
     "failure_breakdown",
+    "is_adhoc_record",
     "load_all_runs",
     "load_run_record",
     "load_task_runs",
     "open_run_view",
+    "partition_runs",
     "render_ascii_bar_chart",
     "render_comparison_report",
     "render_failure_distribution_charts",
+    "render_mermaid_collapsed_timeline",
+    "render_mermaid_repair_loop",
     "render_mermaid_source",
     "render_mermaid_timeline",
     "render_run_html",

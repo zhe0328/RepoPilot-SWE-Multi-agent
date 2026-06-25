@@ -178,6 +178,60 @@ def render_tag_breakdown(breakdown: dict, *, by: str | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_adhoc_breakdown_section(breakdown: dict) -> str:
+    """Markdown section for adhoc-only failure/tag stats."""
+    lines = [
+        "## Adhoc runs (separate bucket)",
+        "",
+        f"Failed runs: **{breakdown['failed_runs']}**",
+        "",
+    ]
+    if breakdown["failed_runs"]:
+        lines.extend(["### By category", ""])
+        for cat, count in breakdown["by_category"].items():
+            lines.append(f"- `{cat}`: {count}")
+        lines.extend(["", "### By stage", ""])
+        for stage, count in breakdown["by_stage"].items():
+            lines.append(f"- `{stage}`: {count}")
+        lines.append("")
+
+    lines.extend(["### By eval tag", ""])
+    for tag_key, count in breakdown.get("by_eval_tag", {}).items():
+        outcomes = breakdown.get("outcome_by_eval_tag", {}).get(tag_key, {})
+        lines.append(
+            f"- `{tag_key}`: {count} run(s) — {outcomes.get('success', 0)} success, "
+            f"{outcomes.get('failure', 0)} failure"
+        )
+    if breakdown.get("by_verify_tier"):
+        lines.extend(["", "### By verify_tier", ""])
+        for tier, count in breakdown["by_verify_tier"].items():
+            lines.append(f"- `{tier}`: {count}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def adhoc_tag_breakdown(records: list[RunRecord]) -> dict:
+    """Breakdown scoped to adhoc runs with eval-tag grouping."""
+    base = tag_breakdown(records)
+    by_eval_tag: Counter[str] = Counter()
+    by_verify_tier: Counter[str] = Counter()
+    tag_outcomes: dict[str, dict[str, int]] = defaultdict(lambda: {"success": 0, "failure": 0})
+
+    for record in records:
+        tags = record.eval_tags or ["untagged"]
+        bucket = "success" if record.outcome == "success" else "failure"
+        for tag in tags:
+            by_eval_tag[tag] += 1
+            tag_outcomes[tag][bucket] += 1
+        tier = record.verify_tier or "strict"
+        by_verify_tier[tier] += 1
+
+    base["by_eval_tag"] = dict(sorted(by_eval_tag.items()))
+    base["by_verify_tier"] = dict(sorted(by_verify_tier.items()))
+    base["outcome_by_eval_tag"] = {k: dict(v) for k, v in sorted(tag_outcomes.items())}
+    return base
+
+
 def _render_breakdown_by_field(breakdown: dict, by: str) -> str:
     field = BY_FIELDS.get(by)
     if not field:
