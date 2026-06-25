@@ -9,6 +9,10 @@ traj.json
 .claude/**
 .vscode/**
 
+# Local planning docs (not for git)
+Plan.md
+repopilot_swe_agent_mvp_plan.md
+
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python
 

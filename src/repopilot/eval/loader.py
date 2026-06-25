@@ -42,6 +42,8 @@ class RunRecord:
     failure_mode: str | None = None
     difficulty: str | None = None
     bug_count: int | None = None
+    verify_tier: str | None = None
+    tests_authored_by: str | None = None
     eval_tags: list[str] = field(default_factory=list)
 
     pytest_runs: list[dict] = field(default_factory=list)
@@ -62,9 +64,8 @@ def discover_all_run_paths(runs_dir: Path) -> list[tuple[Path, str]]:
     if not runs_dir.is_dir():
         return []
     results: list[tuple[Path, str]] = []
-    for path in sorted(runs_dir.iterdir()):
-        if not path.is_dir() or path.name == "eval":
-            continue
+
+    def _collect_task_dir(path: Path) -> None:
         if (path / "trace.json").is_file():
             results.append((path, "latest"))
         history = path / "history"
@@ -72,19 +73,37 @@ def discover_all_run_paths(runs_dir: Path) -> list[tuple[Path, str]]:
             for archived in sorted(history.iterdir()):
                 if archived.is_dir() and (archived / "trace.json").is_file():
                     results.append((archived, archived.name))
+
+    for path in sorted(runs_dir.iterdir()):
+        if not path.is_dir() or path.name in {"eval", ".cache"}:
+            continue
+        if path.name == "adhoc":
+            for adhoc_run in sorted(path.iterdir()):
+                if adhoc_run.is_dir():
+                    _collect_task_dir(adhoc_run)
+            continue
+        _collect_task_dir(path)
     return results
 
 
 def resolve_task_run_dir(runs_dir: Path, task_id: str) -> Path | None:
     runs_dir = runs_dir.resolve()
-    exact = runs_dir / task_id
-    if exact.is_dir() and (exact / "trace.json").is_file():
-        return exact
+    for candidate in (runs_dir / task_id, runs_dir / "adhoc" / task_id):
+        if candidate.is_dir() and (candidate / "trace.json").is_file():
+            return candidate
     matches = sorted(
         path
         for path in runs_dir.iterdir()
-        if path.is_dir() and path.name != "eval" and task_id in path.name and (path / "trace.json").is_file()
+        if path.is_dir() and path.name not in {"eval", ".cache", "adhoc"} and task_id in path.name and (path / "trace.json").is_file()
     )
+    if not matches:
+        adhoc_root = runs_dir / "adhoc"
+        if adhoc_root.is_dir():
+            matches = sorted(
+                path
+                for path in adhoc_root.iterdir()
+                if path.is_dir() and task_id in path.name and (path / "trace.json").is_file()
+            )
     return matches[0] if len(matches) == 1 else None
 
 
@@ -185,6 +204,8 @@ def load_run_record(run_dir: Path, *, run_label: str | None = None) -> RunRecord
         failure_mode=task_tags.get("failure_mode"),
         difficulty=task_tags.get("difficulty"),
         bug_count=task_tags.get("bug_count"),
+        verify_tier=task_tags.get("verify_tier"),
+        tests_authored_by=task_tags.get("tests_authored_by"),
         eval_tags=list(task_tags.get("tags") or []),
         pytest_runs=list(trace.get("pytest_runs") or []),
         steps=list(trace.get("steps") or []),
@@ -203,6 +224,18 @@ def _task_id_from_run_dir(run_dir: Path) -> str:
 
 def load_all_runs(runs_dir: Path) -> list[RunRecord]:
     return [load_run_record(path, run_label=label) for path, label in discover_all_run_paths(runs_dir) if label == "latest"]
+
+
+def load_benchmark_runs(runs_dir: Path) -> list[RunRecord]:
+    from repopilot.eval.adhoc import is_adhoc_record
+
+    return [r for r in load_all_runs(runs_dir) if not is_adhoc_record(r)]
+
+
+def load_adhoc_runs(runs_dir: Path) -> list[RunRecord]:
+    from repopilot.eval.adhoc import is_adhoc_record
+
+    return [r for r in load_all_runs(runs_dir) if is_adhoc_record(r)]
 
 
 def load_task_runs(runs_dir: Path, task_id: str) -> list[RunRecord]:

@@ -9,17 +9,23 @@ import typer
 from repopilot.eval import write_eval_compare, write_eval_summary
 from repopilot.eval.loader import load_run_record, resolve_task_run_dir
 from repopilot.eval.visualize import open_run_view, write_run_view
+from repopilot.runner.adhoc_run import run_adhoc_task
 from repopilot.runner.run_task import find_project_root, resolve_task_dir, run_benchmark_task
 from repopilot.trace import TraceContext, record_trace
 
 app = typer.Typer(help="Run RepoPilot benchmark tasks.")
 eval_app = typer.Typer(help="Aggregate and report on benchmark runs.")
+adhoc_app = typer.Typer(help="Run adhoc user-reported bugs without a benchmarks/ task directory.")
 app.add_typer(eval_app, name="eval")
+app.add_typer(adhoc_app, name="adhoc")
 
 
 @app.command("run")
 def run(
-    task: Path = typer.Argument(..., help="Task directory or task_id under benchmarks/"),
+    task: Path | None = typer.Argument(
+        None,
+        help="Task directory or task_id under benchmarks/ (omit when using --adhoc)",
+    ),
     project_root: Path | None = typer.Option(
         None,
         "--project-root",
@@ -36,13 +42,99 @@ def run(
         "--no-restore",
         help="Keep the task git worktree after run (default: remove runs/{task_id}/.workspace)",
     ),
+    adhoc_repo: str | None = typer.Option(
+        None,
+        "--adhoc",
+        help="Local repo path or git URL for an ephemeral adhoc run (requires --issue and --test-cmd)",
+    ),
+    issue: Path | None = typer.Option(
+        None,
+        "--issue",
+        "-i",
+        help="Issue markdown file (required with --adhoc)",
+    ),
+    test_cmd: str | None = typer.Option(
+        None,
+        "--test-cmd",
+        help="Runner verify command (required with --adhoc)",
+    ),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="Git ref for --adhoc repo snapshot (default: HEAD)",
+    ),
+    verify_tier: str = typer.Option(
+        "strict",
+        "--verify-tier",
+        help="strict | smoke — recorded in trace task_tags",
+    ),
+    tests_tag: str = typer.Option(
+        "tests_preexisting",
+        "--tests-tag",
+        help="tests_preexisting | tests_generated",
+    ),
 ) -> None:
-    """Run a benchmark task end-to-end."""
+    """Run a benchmark task end-to-end, or an adhoc repo + issue with --adhoc."""
     root = (project_root or find_project_root()).resolve()
-    task_dir = resolve_task_dir(task, benchmarks_root=root / "benchmarks")
-    result = run_benchmark_task(
-        task_dir,
+
+    if adhoc_repo:
+        if issue is None or test_cmd is None:
+            raise typer.BadParameter("--issue and --test-cmd are required with --adhoc")
+        result = run_adhoc_task(
+            adhoc_repo,
+            issue,
+            test_command=test_cmd,
+            project_root=root,
+            commit=commit,
+            verify_tier=verify_tier,
+            tests_tag=tests_tag,
+            skip_mini=skip_mini,
+            restore_workspace=not no_restore,
+            dry_run=dry_run,
+        )
+    else:
+        if task is None:
+            raise typer.BadParameter("Provide a benchmark task id/path, or use --adhoc with --issue and --test-cmd")
+        task_dir = resolve_task_dir(task, benchmarks_root=root / "benchmarks")
+        result = run_benchmark_task(
+            task_dir,
+            project_root=root,
+            skip_mini=skip_mini,
+            restore_workspace=not no_restore,
+            dry_run=dry_run,
+        )
+
+    if dry_run:
+        return
+    typer.echo(f"Task {result.task_id} finished.")
+    typer.echo(f"  mini exit code: {result.mini_exit_code}")
+    typer.echo(f"  verify exit code: {result.test_exit_code} ({'passed' if result.tests_passed else 'failed'})")
+    typer.echo(f"  artifacts: {result.output_dir}/")
+
+
+@adhoc_app.command("run")
+def adhoc_run(
+    repo: str = typer.Argument(..., help="Local repo path or git URL"),
+    issue: Path = typer.Argument(..., help="Issue markdown file"),
+    test_cmd: str = typer.Option(..., "--test-cmd", help="Runner verify command"),
+    project_root: Path | None = typer.Option(None, "--project-root"),
+    commit: str | None = typer.Option(None, "--commit", help="Git ref (default: HEAD)"),
+    verify_tier: str = typer.Option("strict", "--verify-tier"),
+    tests_tag: str = typer.Option("tests_preexisting", "--tests-tag"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    skip_mini: bool = typer.Option(False, "--skip-mini"),
+    no_restore: bool = typer.Option(False, "--no-restore"),
+) -> None:
+    """Run an adhoc task; outputs go to runs/adhoc/{task_id}/."""
+    root = (project_root or find_project_root()).resolve()
+    result = run_adhoc_task(
+        repo,
+        issue,
+        test_command=test_cmd,
         project_root=root,
+        commit=commit,
+        verify_tier=verify_tier,
+        tests_tag=tests_tag,
         skip_mini=skip_mini,
         restore_workspace=not no_restore,
         dry_run=dry_run,
@@ -97,11 +189,27 @@ def eval_summary(
         "--output-dir",
         help="Eval output directory (default: runs/eval/summary)",
     ),
+    benchmark_only: bool = typer.Option(
+        True,
+        "--benchmark-only/--include-adhoc",
+        help="Exclude adhoc runs from benchmark aggregate (default). Use --include-adhoc to merge all runs.",
+    ),
+    adhoc_only: bool = typer.Option(
+        False,
+        "--adhoc-only",
+        help="Summarize adhoc runs only (separate bucket)",
+    ),
 ) -> None:
     """Aggregate trace.json + run_meta.yaml into eval reports."""
     root = find_project_root().resolve()
     runs = (runs_dir if runs_dir.is_absolute() else root / runs_dir).resolve()
-    out = write_eval_summary(runs, output_dir=output_dir)
+    out = write_eval_summary(
+        runs,
+        output_dir=output_dir,
+        benchmark_only=benchmark_only and not adhoc_only,
+        adhoc_only=adhoc_only,
+        include_adhoc=not benchmark_only and not adhoc_only,
+    )
     typer.echo(f"Wrote eval summary to {out}/")
     typer.echo("  eval_report.md")
     typer.echo("  metrics.json")
@@ -126,11 +234,24 @@ def eval_compare(
         "--output-dir",
         help="Output directory (default: runs/eval/compare)",
     ),
+    benchmark_only: bool = typer.Option(
+        True,
+        "--benchmark-only/--include-adhoc",
+        help="Exclude adhoc runs from comparison (default)",
+    ),
+    adhoc_only: bool = typer.Option(False, "--adhoc-only", help="Compare adhoc runs only"),
 ) -> None:
     """Compare tasks on steps, cost, and files touched."""
     root = find_project_root().resolve()
     runs = (runs_dir if runs_dir.is_absolute() else root / runs_dir).resolve()
-    out = write_eval_compare(runs, task_id=task, output_dir=output_dir)
+    out = write_eval_compare(
+        runs,
+        task_id=task,
+        output_dir=output_dir,
+        benchmark_only=benchmark_only and not adhoc_only,
+        adhoc_only=adhoc_only,
+        include_adhoc=not benchmark_only and not adhoc_only,
+    )
     typer.echo(f"Wrote comparison to {out}/")
     typer.echo("  comparison_report.md")
     typer.echo("  comparison_table.csv")
@@ -154,23 +275,46 @@ def eval_breakdown(
         "--output-dir",
         help="Output directory (default: runs/eval/summary)",
     ),
+    benchmark_only: bool = typer.Option(
+        True,
+        "--benchmark-only/--include-adhoc",
+        help="Benchmark failure breakdown only (default). Adhoc section appended when present.",
+    ),
+    adhoc_only: bool = typer.Option(False, "--adhoc-only", help="Adhoc breakdown only"),
 ) -> None:
     """Regenerate failure breakdown with failure_mode / difficulty tags."""
     root = find_project_root().resolve()
     runs = (runs_dir if runs_dir.is_absolute() else root / runs_dir).resolve()
     out_dir = (output_dir or runs / "eval" / "summary").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    from repopilot.eval.failure_analysis import BY_FIELDS, render_tag_breakdown, tag_breakdown
+    from repopilot.eval.adhoc import partition_runs
+    from repopilot.eval.failure_analysis import BY_FIELDS, adhoc_tag_breakdown, render_adhoc_breakdown_section, render_tag_breakdown, tag_breakdown
     from repopilot.eval.loader import load_all_runs
 
     if by and by not in BY_FIELDS:
         allowed = ", ".join(sorted(BY_FIELDS))
         raise typer.BadParameter(f"Unknown --by {by!r}; choose from: {allowed}")
 
-    records = load_all_runs(runs)
-    if not records:
+    all_records = load_all_runs(runs)
+    if not all_records:
         raise typer.BadParameter(f"No runs with trace.json found under {runs}")
-    (out_dir / "failure_breakdown.md").write_text(render_tag_breakdown(tag_breakdown(records), by=by))
+    benchmark_records, adhoc_records = partition_runs(all_records)
+
+    if adhoc_only:
+        records = adhoc_records
+        md = render_adhoc_breakdown_section(adhoc_tag_breakdown(records))
+    elif benchmark_only:
+        records = benchmark_records
+        md = render_tag_breakdown(tag_breakdown(records), by=by)
+        if adhoc_records:
+            md = md.rstrip() + "\n\n" + render_adhoc_breakdown_section(adhoc_tag_breakdown(adhoc_records))
+    else:
+        records = all_records
+        md = render_tag_breakdown(tag_breakdown(records), by=by)
+
+    if not records and not adhoc_records:
+        raise typer.BadParameter(f"No runs in selected scope under {runs}")
+    (out_dir / "failure_breakdown.md").write_text(md)
     typer.echo(f"Wrote {out_dir / 'failure_breakdown.md'}")
 
 

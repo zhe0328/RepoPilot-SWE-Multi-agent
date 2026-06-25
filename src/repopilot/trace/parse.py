@@ -156,11 +156,44 @@ def extract_pytest_sections(text: str) -> list[str]:
     return []
 
 
+def _strip_heredoc_bodies(command: str) -> str:
+    """Remove heredoc body lines; keep opener (and any shell lines after the heredoc)."""
+    lines = command.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        match = re.search(r"<<-?\s*(['\"]?)(\w+)\1", line)
+        if match:
+            out.append(line)
+            delim = match.group(2)
+            i += 1
+            while i < len(lines) and lines[i].strip() != delim:
+                i += 1
+            if i < len(lines):
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
+
+_PYTEST_EXEC = re.compile(
+    r"(?:^|[;&|]\s*|\n)\s*(?:[\w./=-]+\s+)*?(?:python\d*(?:\.\w+)?\s+-m\s+)?pytest\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _is_pytest_execution(command: str) -> bool:
+    """True when the shell command actually invokes pytest (not pytest mentioned in a heredoc body)."""
+    return bool(_PYTEST_EXEC.search(_strip_heredoc_bodies(command)))
+
+
 def is_edit_command(command: str) -> bool:
     """Return True if a shell command likely modifies source files."""
     if not command:
         return False
-    return any(
+    if any(
         token in command
         for token in (
             "path.write_text",
@@ -172,16 +205,26 @@ def is_edit_command(command: str) -> bool:
             "git apply",
             "patch -p",
         )
-    )
+    ):
+        return True
+    if re.search(r"^\s*cat\s+<<", command, re.MULTILINE) and re.search(
+        r">\s*[\w./-]+\.(?:py|yaml|yml|md|toml|json|sh)", command
+    ):
+        return True
+    if re.search(r"^\s*python\d*(?:\.\w+)?\s+-", command, re.MULTILINE) and (
+        ".write_text(" in command or "p.write_text" in command or ".replace(" in command
+    ):
+        return True
+    return False
 
 
 def classify_command_stage(command: str) -> str:
     cmd = command.lower()
-    if "pytest" in cmd:
-        return "test"
     if is_edit_command(command):
         return "edit"
-    if "git diff" in cmd or "submit" in cmd:
+    if _is_pytest_execution(command):
+        return "test"
+    if "git diff" in cmd or "complete_task_and_submit" in cmd:
         return "submit"
     if any(
         token in cmd
@@ -193,7 +236,7 @@ def classify_command_stage(command: str) -> str:
 
 def infer_step_stage(tool_calls: list[ToolCallRecord]) -> str:
     stages = [classify_command_stage(tc.command) for tc in tool_calls]
-    for preferred in ("test", "edit", "read", "submit"):
+    for preferred in ("edit", "test", "read", "submit"):
         if preferred in stages:
             return preferred
     return "other"
@@ -294,12 +337,20 @@ def extract_viewed_files(rows: list[tuple[str, str, int | None]]) -> list[str]:
 
 
 def capture_workspace_diff(workspace: Path) -> str:
-    """Return unstaged git diff from a task worktree after the agent run."""
+    """Return git diff from a task worktree after the agent run (includes new untracked files)."""
     workspace = workspace.resolve()
     if not workspace.is_dir():
         return ""
     if not (workspace / ".git").exists() and not _is_git_worktree(workspace):
         return ""
+    # Intent-to-add so `git diff` includes newly created files (Phase D repro tests).
+    subprocess.run(
+        ["git", "add", "-N", "-A"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     result = subprocess.run(
         ["git", "diff", "--no-ext-diff"],
         cwd=workspace,
@@ -426,3 +477,40 @@ def _patch_from_edit_command(cmd: str) -> str:
         return ""
 
     return _unified_diff_block(path_match.group(1), old_text, new_text)
+
+
+def _is_test_file_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    return "/tests/" in normalized or normalized.startswith("tests/") or "/test_" in normalized
+
+
+def analyze_patch_test_files(patch_text: str) -> dict[str, list[str]]:
+    """Return test file paths touched or added in a unified diff."""
+    if not patch_text or patch_text.strip().startswith("#"):
+        return {"test_files_touched": [], "test_files_added": []}
+
+    touched: list[str] = []
+    added: list[str] = []
+    current_path: str | None = None
+    is_new_file = False
+
+    for line in patch_text.splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split()
+            if len(parts) >= 4:
+                current_path = parts[3][2:] if parts[3].startswith("b/") else parts[3]
+                is_new_file = False
+                if current_path and _is_test_file_path(current_path) and current_path not in touched:
+                    touched.append(current_path)
+            continue
+        if line.startswith("new file mode"):
+            is_new_file = True
+            continue
+        if line.startswith("deleted file mode"):
+            is_new_file = False
+            continue
+        if is_new_file and current_path and _is_test_file_path(current_path):
+            if current_path not in added:
+                added.append(current_path)
+
+    return {"test_files_touched": touched, "test_files_added": added}

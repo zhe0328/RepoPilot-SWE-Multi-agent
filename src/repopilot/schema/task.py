@@ -28,7 +28,10 @@ class EvalTags(BaseModel):
     difficulty: str | None = None
     bug_count: int | None = None
     expected_repair_rounds: int | None = None
+    verify_tier: Literal["strict", "smoke"] | None = None
+    """strict: full pytest suite (default). smoke: weak verify (py_compile, python -c, etc.)."""
     tags: list[str] = Field(default_factory=list)
+    """Common adhoc tags: adhoc, tests_preexisting, tests_generated."""
 
 
 class AgentConfig(BaseModel):
@@ -99,12 +102,12 @@ def load_task(task_dir: Path) -> TaskConfig:
 
 
 def discover_tasks(benchmarks_root: Path) -> list[Path]:
-    """Return task directories containing config.yaml, sorted by name."""
+    """Return formal benchmark task dirs (`task_*`) containing config.yaml."""
     benchmarks_root = benchmarks_root.resolve()
     if not benchmarks_root.is_dir():
         return []
     return sorted(
         path.parent
-        for path in benchmarks_root.glob("*/config.yaml")
+        for path in benchmarks_root.glob("task_*/config.yaml")
         if path.parent.is_dir()
     )

@@ -1,0 +1,4 @@
+eval:
+  tags:
+    - adhoc
+    - tests_generated   # Phase D — agent authors repro tests during the run

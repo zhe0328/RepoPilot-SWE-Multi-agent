@@ -1,0 +1,32 @@
+task_id: adhoc_parser_empty
+description: User-reported empty CSV input bug (adhoc Phase A demo)
+
+repo:
+  path: .
+  # No setup.patch — buggy code is committed in fixture/ at this commit.
+  # Run: python benchmarks/adhoc_parser_empty/pin_base_commit.py after committing.
+  base_commit: "f10b07d4b7b4007912e0340b969ba2a4d8888e25"
+
+eval:
+  failure_mode: adhoc
+  difficulty: user_reported
+  verify_tier: strict
+  tags:
+    - adhoc
+    - tests_preexisting
+
+issue_file: issue.md
+
+test_command: >-
+  PYTHONPATH=benchmarks/adhoc_parser_empty/fixture
+  python -m pytest benchmarks/adhoc_parser_empty/fixture/tests/test_repro.py -v
+expected_behavior: Empty input returns [] without raising
+
+agent:
+  mode: baseline
+  mini_flags:
+    - -y
+    - --exit-immediately
+    - --cost-limit
+    - "0.50"
+  output_trajectory: runs/{task_id}/trajectory.traj.json

@@ -1,0 +1,32 @@
+task_id: adhoc_EXAMPLE
+description: Short description of user-reported bug
+
+repo:
+  path: .
+  # Required: commit buggy code first, then pin with pin_base_commit.py (or set SHA manually).
+  # No setup.patch for adhoc tasks.
+  base_commit: "REPLACE_WITH_git_rev-parse_HEAD"
+
+eval:
+  failure_mode: adhoc
+  difficulty: user_reported
+  verify_tier: strict   # strict | smoke — see benchmarks/README.md
+  tags:
+    - adhoc
+    - tests_preexisting   # or tests_generated (Phase D)
+
+issue_file: issue.md
+
+test_command: >-
+  PYTHONPATH=benchmarks/adhoc_EXAMPLE/fixture
+  python -m pytest benchmarks/adhoc_EXAMPLE/fixture/tests/test_repro.py -v
+expected_behavior: Human-readable success criteria
+
+agent:
+  mode: baseline
+  mini_flags:
+    - -y
+    - --exit-immediately
+    - --cost-limit
+    - "0.50"
+  output_trajectory: runs/{task_id}/trajectory.traj.json

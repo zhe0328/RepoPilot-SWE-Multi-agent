@@ -1,0 +1,35 @@
+# Adhoc Phase C — external repo (no pytest suite in coach-agent).
+# See README.md for setup and run commands.
+
+task_id: adhoc_coach_agent
+description: Duplicate unauthenticated chat API routes (ISSUE-001)
+
+repo:
+  repo_url: git@github.com:zhe0328/coach-agent.git
+  base_commit: master
+
+eval:
+  failure_mode: adhoc
+  difficulty: user_reported
+  verify_tier: smoke   # no pytest in repo — static route-dedup check below
+  tags:
+    - adhoc
+
+issue_file: issue.md
+
+# Smoke verify: fails while duplicate routes exist; passes after agent removes L302–328.
+# Does NOT prove JWT/auth behavior — review patch.diff manually for that.
+test_command: >-
+  cd backend && python -c "from pathlib import Path; t=Path('app/api/main.py').read_text(); s=t.count('\"/v1/chat/sessions/{user_id}\"'); h=t.count('\"/v1/chat/history/{session_id}\"'); assert s==1, f'sessions route defined {s} times (want 1)'; assert h==1, f'history route defined {h} times (want 1)'; print('route dedup OK')"
+
+expected_behavior: >-
+  Each chat GET route appears exactly once in main.py; JWT/auth fixes reviewed manually.
+
+agent:
+  mode: baseline
+  mini_flags:
+    - -y
+    - --exit-immediately
+    - --cost-limit
+    - "0.50"
+  output_trajectory: runs/{task_id}/trajectory.traj.json

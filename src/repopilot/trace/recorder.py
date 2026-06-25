@@ -11,6 +11,7 @@ from repopilot.trace.classify import build_failure_reason_md, classify_trace
 from repopilot.trace.parse import (
     PytestRun,
     TraceStep,
+    analyze_patch_test_files,
     extract_patch_diff,
     extract_pytest_runs,
     extract_viewed_files,
@@ -36,6 +37,7 @@ class TraceContext:
     difficulty: str | None = None
     bug_count: int | None = None
     eval_tags: list[str] | None = None
+    verify_tier: str | None = None
     workspace_patch: str | None = None
     """Full git diff captured from the task worktree after the agent run."""
 
@@ -134,7 +136,8 @@ def build_trace_document(
 
     steps_dict = _steps_to_dict(steps)
     pytest_dict = _pytest_to_dict(pytest_runs)
-    patch = {"source": patch_source, "text": patch_text}
+    patch_meta = analyze_patch_test_files(patch_text)
+    patch = {"source": patch_source, "text": patch_text, **patch_meta}
 
     task_tags: dict[str, object] = {}
     if ctx.failure_mode:
@@ -143,8 +146,14 @@ def build_trace_document(
         task_tags["difficulty"] = ctx.difficulty
     if ctx.bug_count is not None:
         task_tags["bug_count"] = ctx.bug_count
+    if ctx.verify_tier:
+        task_tags["verify_tier"] = ctx.verify_tier
     if ctx.eval_tags:
         task_tags["tags"] = list(ctx.eval_tags)
+        if "tests_generated" in ctx.eval_tags:
+            task_tags["tests_authored_by"] = "agent"
+        elif "tests_preexisting" in ctx.eval_tags:
+            task_tags["tests_authored_by"] = "preexisting"
 
     outcome_fields = classify_trace(
         steps=steps_dict,
@@ -217,6 +226,11 @@ def build_final_report(trace: dict) -> str:
         lines.append(f"- **Failure message:** {trace['failure_message']}")
     if trace.get("task_tags"):
         lines.append(f"- **Task tags:** `{trace['task_tags']}`")
+    patch = trace.get("patch") or {}
+    if patch.get("test_files_added"):
+        lines.append(f"- **Test files added in patch:** `{patch['test_files_added']}`")
+    elif patch.get("test_files_touched"):
+        lines.append(f"- **Test files touched in patch:** `{patch['test_files_touched']}`")
     lines.append("")
 
     if pre_fix:
