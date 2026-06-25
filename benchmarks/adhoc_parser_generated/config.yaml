@@ -1,0 +1,33 @@
+task_id: adhoc_parser_generated
+description: User-reported empty CSV bug — agent must write repro tests (Adhoc Phase D)
+
+repo:
+  path: .
+  # Commit fixture/ WITHOUT tests/, then: python benchmarks/adhoc_parser_generated/pin_base_commit.py
+  base_commit: "REPLACE_WITH_git_rev-parse_HEAD"
+
+eval:
+  failure_mode: adhoc
+  difficulty: user_reported
+  verify_tier: strict
+  tags:
+    - adhoc
+    - tests_generated
+
+issue_file: issue.md
+
+# Expects agent to create fixture/tests/test_repro.py during the run.
+test_command: >-
+  PYTHONPATH=benchmarks/adhoc_parser_generated/fixture
+  python -m pytest benchmarks/adhoc_parser_generated/fixture/tests/test_repro.py -v
+
+expected_behavior: Agent writes repro pytest, fixes parser, runner verify passes
+
+agent:
+  mode: baseline
+  mini_flags:
+    - -y
+    - --exit-immediately
+    - --cost-limit
+    - "0.50"
+  output_trajectory: runs/{task_id}/trajectory.traj.json
